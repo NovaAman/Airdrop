@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Airdrop Mining</title>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .container { border: 1px solid #ccc; padding: 20px; border-radius: 10px; }
+        .auth-section, .dashboard { margin-bottom: 20px; }
+        .timer { font-size: 24px; margin: 10px 0; }
+        button { padding: 10px 20px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:disabled { background: #cccccc; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="auth-section" id="authSection">
+            <h2>Sign Up/Login</h2>
+            <input type="email" id="email" placeholder="Email">
+            <input type="password" id="password" placeholder="Password">
+            <input type="text" id="referralCode" placeholder="Referral Code (optional)">
+            <button onclick="handleAuth()">Sign Up/Login</button>
+        </div>
+
+        <div class="dashboard" id="dashboard" style="display: none;">
+            <h2>Mining Dashboard</h2>
+            <p>Points: <span id="points">0</span></p>
+            <p class="timer">Time Remaining: <span id="timer">00:00:00</span></p>
+            <button id="startButton" onclick="startMining()">Start Mining</button>
+            <p>Your Referral Code: <span id="userReferralCode"></span></p>
+        </div>
+    </div>
+
+<script>
+  // Firebase configuration
+  const firebaseConfig = {
+    apiKey: "YOUR_API_KEY",
+    authDomain: "YOUR_AUTH_DOMAIN",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_STORAGE_BUCKET",
+    messagingSenderId: "YOUR_SENDER_ID",
+    appId: "YOUR_APP_ID"
+  };
+
+  // Initialize Firebase
+  firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db = firebase.firestore();
+
+  let timerInterval;
+  let currentUser = null;
+
+  // Authentication handler
+  async function handleAuth() {
+    const email = document.getElementById('email').value;
+    const password = document.getElementById('password').value;
+    const referralCode = document.getElementById('referralCode').value;
+
+    try {
+      const userCredential = await auth.signInWithEmailAndPassword(email, password);
+      currentUser = userCredential.user;
+      checkUserProfile();
+    } catch (error) {
+      try {
+        const userCredential = await auth.createUserWithEmailAndPassword(email, password);
+        currentUser = userCredential.user;
+        await createUserProfile(referralCode);
+      } catch (error) {
+        alert(error.message);
+      }
+    }
+  }
+
+  // Create user profile with referral handling
+  async function createUserProfile(referralCode) {
+    const userRef = db.collection('users').doc(currentUser.uid);
+    const userData = {
+      email: currentUser.email,
+      points: 0,
+      referralCode: generateReferralCode(),
+      lastStartTime: null
+    };
+
+    await userRef.set(userData);
+
+    if (referralCode) {
+      const referrer = await db.collection('users').where('referralCode', '==', referralCode).get();
+      if (!referrer.empty) {
+        const referrerId = referrer.docs[0].id;
+        await db.collection('users').doc(referrerId).update({
+          points: firebase.firestore.FieldValue.increment(1000)
+        });
+        await userRef.update({ points: firebase.firestore.FieldValue.increment(1000) });
+      }
+    }
+    checkUserProfile();
+  }
+
+  // Check user profile and update UI
+  async function checkUserProfile() {
+    const userDoc = await db.collection('users').doc(currentUser.uid).get();
+    const userData = userDoc.data();
+
+    document.getElementById('authSection').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+    document.getElementById('points').textContent = userData.points;
+    document.getElementById('userReferralCode').textContent = userData.referralCode;
+
+    if (userData.lastStartTime) {
+      startTimer(userData.lastStartTime.toDate());
+    }
+  }
+
+  // Mining system
+  async function startMining() {
+    const startTime = new Date();
+    await db.collection('users').doc(currentUser.uid).update({
+      lastStartTime: startTime
+    });
+    startTimer(startTime);
+  }
+
+  // Timer functionality
+  function startTimer(startTime) {
+    const endTime = new Date(startTime.getTime() + 24 * 60 * 60 * 1000);
+    
+    function updateTimer() {
+      const now = new Date();
+      const remaining = endTime - now;
+
+      if (remaining <= 0) {
+        clearInterval(timerInterval);
+        document.getElementById('timer').textContent = '00:00:00';
+        document.getElementById('startButton').disabled = false;
+        updatePoints();
+        return;
+      }
+
+      const hours = Math.floor(remaining / (1000 * 60 * 60));
+      const minutes = Math.floor((remaining % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((remaining % (1000 * 60)) / 1000);
+
+      document.getElementById('timer').textContent = 
+        `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+      
+      document.getElementById('startButton').disabled = true;
+    }
+
+    clearInterval(timerInterval);
+    timerInterval = setInterval(updateTimer, 1000);
+    updateTimer();
+  }
+
+  // Update points based on mining time
+  async function updatePoints() {
+    const userRef = db.collection('users').doc(currentUser.uid);
+    const userDoc = await userRef.get();
+    const startTime = userDoc.data().lastStartTime.toDate();
+    const elapsed = (new Date() - startTime) / (1000 * 60 * 60 * 24);
+    const pointsEarned = Math.floor(elapsed * 100);
+
+    await userRef.update({
+      points: firebase.firestore.FieldValue.increment(pointsEarned),
+      lastStartTime: null
+    });
+
+    document.getElementById('points').textContent = userDoc.data().points + pointsEarned;
+  }
+
+  // Generate random referral code
+  function generateReferralCode() {
+    return Math.random().toString(36).substr(2, 8).toUpperCase();
+  }
+</script>
+</body>
+</html>
